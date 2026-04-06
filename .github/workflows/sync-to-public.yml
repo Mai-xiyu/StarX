@@ -1,0 +1,159 @@
+name: Sync Release from StarX_REPO
+
+on:
+  schedule:
+    - cron: '0 * * * *'       # 每小时整点触发
+  workflow_dispatch:           # 允许手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout StarX (public)
+        uses: actions/checkout@v4
+
+      - name: Fetch latest release from StarX_REPO
+        id: fetch
+        env:
+          REPO_PAT: ${{ secrets.REPO_PAT }}
+        run: |
+          echo "::group::Fetching latest release from StarX_REPO"
+
+          RESPONSE=$(curl -sf \
+            -H "Authorization: token ${REPO_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Mai-xiyu/StarX_REPO/releases/latest") || {
+            echo "No release found or API error"
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          UPSTREAM_TAG=$(echo "$RESPONSE" | jq -r '.tag_name')
+          UPSTREAM_NAME=$(echo "$RESPONSE" | jq -r '.name')
+          UPSTREAM_BODY=$(echo "$RESPONSE" | jq -r '.body')
+          ASSET_URL=$(echo "$RESPONSE" | jq -r '.assets[0].url // empty')
+          ASSET_NAME=$(echo "$RESPONSE" | jq -r '.assets[0].name // empty')
+
+          if [ -z "$UPSTREAM_TAG" ] || [ "$UPSTREAM_TAG" = "null" ]; then
+            echo "No valid upstream tag"
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Upstream tag: $UPSTREAM_TAG"
+          echo "upstream_tag=$UPSTREAM_TAG" >> "$GITHUB_OUTPUT"
+          echo "upstream_name=$UPSTREAM_NAME" >> "$GITHUB_OUTPUT"
+          echo "asset_url=$ASSET_URL" >> "$GITHUB_OUTPUT"
+          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
+
+          # 用 EOF 分隔符安全传递多行 body
+          {
+            echo "upstream_body<<BODY_EOF"
+            echo "$UPSTREAM_BODY"
+            echo "BODY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "::endgroup::"
+
+          # 检查公开仓库是否已有相同 tag
+          echo "::group::Checking existing release"
+          PUBLIC_RESPONSE=$(curl -sf \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token ${REPO_PAT}" \
+            "https://api.github.com/repos/Mai-xiyu/StarX/releases/tags/${UPSTREAM_TAG}" 2>/dev/null) && {
+            echo "Tag $UPSTREAM_TAG already exists on StarX, skipping"
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          echo "New release detected: $UPSTREAM_TAG"
+          echo "has_new=true" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+
+      - name: Download release asset
+        if: steps.fetch.outputs.has_new == 'true' && steps.fetch.outputs.asset_url != ''
+        env:
+          REPO_PAT: ${{ secrets.REPO_PAT }}
+        run: |
+          curl -L \
+            -H "Authorization: token ${REPO_PAT}" \
+            -H "Accept: application/octet-stream" \
+            "${{ steps.fetch.outputs.asset_url }}" \
+            -o "${{ steps.fetch.outputs.asset_name }}"
+          ls -lh "${{ steps.fetch.outputs.asset_name }}"
+
+      - name: Delete old releases
+        if: steps.fetch.outputs.has_new == 'true'
+        env:
+          REPO_PAT: ${{ secrets.REPO_PAT }}
+        run: |
+          echo "::group::Cleaning old releases"
+
+          # 获取所有 release
+          RELEASES=$(curl -sf \
+            -H "Authorization: token ${REPO_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Mai-xiyu/StarX/releases")
+
+          # 逐个删除
+          echo "$RELEASES" | jq -r '.[].id' | while read -r RELEASE_ID; do
+            echo "Deleting release $RELEASE_ID"
+            curl -sf -X DELETE \
+              -H "Authorization: token ${REPO_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/Mai-xiyu/StarX/releases/${RELEASE_ID}" || true
+          done
+
+          # 删除所有旧 tag (远程)
+          git fetch --tags
+          for TAG in $(git tag -l); do
+            echo "Deleting tag $TAG"
+            git push origin ":refs/tags/$TAG" 2>/dev/null || true
+            git tag -d "$TAG" 2>/dev/null || true
+          done
+
+          echo "::endgroup::"
+
+      - name: Create new tag and release
+        if: steps.fetch.outputs.has_new == 'true'
+        env:
+          REPO_PAT: ${{ secrets.REPO_PAT }}
+        run: |
+          TAG="${{ steps.fetch.outputs.upstream_tag }}"
+          NAME="${{ steps.fetch.outputs.upstream_name }}"
+
+          # 创建并推送 tag
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+          # 创建 Release (先不带文件)
+          RELEASE_RESPONSE=$(curl -sf -X POST \
+            -H "Authorization: token ${REPO_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Mai-xiyu/StarX/releases" \
+            -d "$(jq -n \
+              --arg tag "$TAG" \
+              --arg name "$NAME" \
+              --arg body "${{ steps.fetch.outputs.upstream_body }}" \
+              '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')")
+
+          RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
+          echo "Created release ID: $RELEASE_ID"
+
+          # 上传 asset
+          ASSET_FILE="${{ steps.fetch.outputs.asset_name }}"
+          if [ -f "$ASSET_FILE" ]; then
+            echo "Uploading $ASSET_FILE"
+            curl -sf -X POST \
+              -H "Authorization: token ${REPO_PAT}" \
+              -H "Content-Type: application/vnd.android.package-archive" \
+              "https://uploads.github.com/repos/Mai-xiyu/StarX/releases/${RELEASE_ID}/assets?name=${ASSET_FILE}" \
+              --data-binary "@${ASSET_FILE}"
+            echo "Upload complete"
+          fi
