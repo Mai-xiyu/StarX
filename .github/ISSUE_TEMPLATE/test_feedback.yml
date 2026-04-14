@@ -1,0 +1,91 @@
+name: 公测反馈
+description: 提交一轮测试结果，帮助快速收集兼容性与回归信息
+title: "[Test] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        这个模板适合集中反馈一轮测试结果。即使没有报错，也欢迎提交“哪些功能正常”。
+
+  - type: input
+    id: starx-version
+    attributes:
+      label: 测试版本
+      placeholder: 例如 v1.2.0
+    validations:
+      required: true
+
+  - type: input
+    id: device-env
+    attributes:
+      label: 设备与环境
+      placeholder: 例如 Android 13 / OnePlus 11 / LSPosed 1.9.3 / 学习通 6.5.8
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: cases
+    attributes:
+      label: 本次实际测试项目
+      options:
+        - label: 动态题库源新增 / 删除
+        - label: 手动切换题库协议类型
+        - label: ZXSeek 预置源
+        - label: tikuAdapter 根地址查询
+        - label: H5 二维码签到
+        - label: 原生二维码签到
+        - label: 拍照签到上传
+        - label: 定位签到
+        - label: 考试搜题 / 题目识别
+        - label: 设置页 UI / 保存逻辑
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: 总体结果
+      options:
+        - 全部正常
+        - 大部分正常，存在小问题
+        - 有明显回归
+        - 无法完成核心流程
+    validations:
+      required: true
+
+  - type: textarea
+    id: passed
+    attributes:
+      label: 正常的项目
+      placeholder: 例如 ZXSeek 预置源可正常查询；拍照签到在 H5 页面上传成功
+    validations:
+      required: false
+
+  - type: textarea
+    id: failed
+    attributes:
+      label: 异常的项目
+      placeholder: 例如原生二维码签到无效；保存后自定义 adapter 协议变回自动识别
+    validations:
+      required: true
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: 详细说明
+      description: 重点写清楚出问题的页面、入口、是否稳定复现，以及截图或日志
+      placeholder: |
+        页面：
+        入口：
+        复现频率：
+        现象：
+        附件：
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 额外建议
+      placeholder: 对文案、交互或日志输出的建议也可以写在这里
+    validations:
+      required: false

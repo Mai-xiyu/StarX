@@ -1,0 +1,119 @@
+name: 缺陷反馈
+description: 提交可复现的错误、回归或兼容性问题
+title: "[Bug] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请尽量提供完整复现信息。和学习通页面相关的问题，最好附上页面链接、截图和 StarX 日志。
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已确认这是最新公开版本仍可复现的问题
+          required: true
+        - label: 我已搜索过现有 issue，未发现相同问题
+          required: true
+        - label: 我愿意补充截图、日志或复现视频
+          required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 问题模块
+      options:
+        - 动态题库源
+        - ZXSeek / Wkexam
+        - tikuAdapter
+        - H5 二维码签到
+        - 原生二维码签到
+        - 拍照签到上传
+        - 定位签到
+        - 考试搜题
+        - UI / 设置页
+        - 激活 / 许可
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: starx-version
+    attributes:
+      label: StarX 版本
+      placeholder: 例如 v1.2.0
+    validations:
+      required: true
+
+  - type: input
+    id: chaoxing-version
+    attributes:
+      label: 学习通版本
+      placeholder: 例如 6.5.8
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 设备环境
+      placeholder: 例如 Android 14 / Xiaomi 14 / LSPosed 1.9.3
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 按顺序写清楚页面入口、操作步骤、输入内容
+      placeholder: |
+        1. 打开学习通进入 xxx 页面
+        2. 在 StarX 设置里打开 xxx
+        3. 点击 xxx
+        4. 出现 xxx
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+      placeholder: 例如应自动识别为 tikuAdapter 并正常返回答案
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      placeholder: 例如保存后再次进入设置，查询走成 LemTk，接口返回为空
+    validations:
+      required: true
+
+  - type: textarea
+    id: page-info
+    attributes:
+      label: 页面信息
+      description: 如果问题和某个学习通页面有关，请附上页面标题、链接关键字或截图说明
+      placeholder: 例如 作业页面 / newsign/studentSign / 上传拍照签到页
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志与附件
+      description: 建议附上截图、录屏或 StarX 日志。可在复现后导出 adb logcat -d -s StarX:D *:S
+      placeholder: 粘贴日志、截图链接或附件说明
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明
+      placeholder: 任何你认为有帮助的上下文，例如题库地址、协议类型、二维码内容类型等
+    validations:
+      required: false

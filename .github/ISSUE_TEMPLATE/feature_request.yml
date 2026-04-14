@@ -1,0 +1,58 @@
+name: 功能建议
+description: 提交新功能、交互优化或可维护性改进建议
+title: "[Feature] "
+labels: []
+body:
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索过现有 issue，没有发现相同建议
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 建议方向
+      options:
+        - 题库与搜题
+        - 签到辅助
+        - UI / 设置页
+        - 日志与调试能力
+        - 激活 / 发布流程
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      placeholder: 例如用户很难区分 H5 二维码和原生二维码载荷，容易填错配置
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望如何改进
+      placeholder: 例如把二维码配置拆成两个输入框，并在原生扫码页显示单独提示
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: 使用场景
+      placeholder: 这个建议会在什么情况下带来帮助
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充资料
+      placeholder: 可以附上截图、参考项目、页面链接或接口文档
+    validations:
+      required: false
