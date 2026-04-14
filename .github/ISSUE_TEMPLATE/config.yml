@@ -3,3 +3,7 @@ contact_links:
   - name: 使用说明与最新版本
     url: https://github.com/Mai-xiyu/StarX/releases
     about: 提交问题前请先确认已升级到最新公开版本，并记录模块版本、学习通版本和复现页面。
+  - name: 公测反馈清单
+    url: https://github.com/Mai-xiyu/StarX/blob/main/PUBLIC_TEST_CHECKLIST.md
+    about: 不确定应该重点测试什么时，先按这份清单回归。
+

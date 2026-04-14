@@ -1,0 +1,123 @@
+name: Auto Label Issues
+
+on:
+  issues:
+    types:
+      - opened
+      - edited
+      - reopened
+
+permissions:
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Auto label issue forms
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const title = issue.title || "";
+            const body = issue.body || "";
+
+            const managedLabels = [
+              { name: "type:bug", color: "d73a4a", description: "缺陷反馈" },
+              { name: "type:test-feedback", color: "1d76db", description: "公测反馈" },
+              { name: "type:feature", color: "a2eeef", description: "功能建议" },
+              { name: "status:needs-triage", color: "fbca04", description: "等待人工分诊" },
+              { name: "needs-info", color: "f9d0c4", description: "缺少必要复现信息" },
+              { name: "area:tiku", color: "0e8a16", description: "题库与搜题" },
+              { name: "area:zxseek", color: "1b5e20", description: "ZXSeek / Wkexam" },
+              { name: "area:tikuadapter", color: "2e8b57", description: "tikuAdapter" },
+              { name: "area:sign-assist", color: "5319e7", description: "签到辅助" },
+              { name: "area:sign-h5-qr", color: "6f42c1", description: "H5 二维码签到" },
+              { name: "area:sign-native-qr", color: "7f52ff", description: "原生二维码签到" },
+              { name: "area:photo-sign", color: "c2e0c6", description: "拍照签到" },
+              { name: "area:location-sign", color: "bfdadc", description: "定位签到" },
+              { name: "area:exam", color: "0366d6", description: "考试搜题" },
+              { name: "area:settings-ui", color: "bfd4f2", description: "设置页与 UI" },
+              { name: "area:license", color: "d4c5f9", description: "激活与许可" },
+              { name: "area:logging", color: "fef2c0", description: "日志与调试能力" },
+              { name: "area:release", color: "c5def5", description: "发布与反馈流程" }
+            ];
+
+            async function ensureLabel(label) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name,
+                  color: label.color,
+                  description: label.description
+                });
+              }
+            }
+
+            for (const label of managedLabels) {
+              await ensureLabel(label);
+            }
+
+            function getFieldValue(fieldName) {
+              const escaped = fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const regex = new RegExp(`### ${escaped}\\s*\\n([\\s\\S]*?)(?=\\n### |$)`);
+              const match = body.match(regex);
+              return match ? match[1].trim() : "";
+            }
+
+            const nextLabels = new Set(["status:needs-triage"]);
+            if (/^\[Bug\]/i.test(title)) nextLabels.add("type:bug");
+            if (/^\[Test\]/i.test(title)) nextLabels.add("type:test-feedback");
+            if (/^\[Feature\]/i.test(title)) nextLabels.add("type:feature");
+
+            const areaValue = getFieldValue("问题模块") || getFieldValue("建议方向");
+            const areaMap = {
+              "动态题库源": "area:tiku",
+              "ZXSeek / Wkexam": "area:zxseek",
+              "tikuAdapter": "area:tikuadapter",
+              "H5 二维码签到": "area:sign-h5-qr",
+              "原生二维码签到": "area:sign-native-qr",
+              "拍照签到上传": "area:photo-sign",
+              "定位签到": "area:location-sign",
+              "考试搜题": "area:exam",
+              "UI / 设置页": "area:settings-ui",
+              "激活 / 许可": "area:license",
+              "题库与搜题": "area:tiku",
+              "签到辅助": "area:sign-assist",
+              "日志与调试能力": "area:logging",
+              "激活 / 发布流程": "area:release"
+            };
+            if (areaMap[areaValue]) {
+              nextLabels.add(areaMap[areaValue]);
+            }
+
+            const logsValue = getFieldValue("日志与附件");
+            const detailValue = getFieldValue("详细说明");
+            if ((nextLabels.has("type:bug") || nextLabels.has("type:test-feedback"))
+              && !logsValue
+              && (!detailValue || detailValue.length < 20)) {
+              nextLabels.add("needs-info");
+            }
+
+            const managedNames = new Set(managedLabels.map(label => label.name));
+            const existing = (issue.labels || [])
+              .map(label => typeof label === "string" ? label : label.name)
+              .filter(Boolean);
+            const preserved = existing.filter(label => !managedNames.has(label));
+            const finalLabels = [...new Set([...preserved, ...nextLabels])];
+
+            await github.rest.issues.setLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: finalLabels
+            });
