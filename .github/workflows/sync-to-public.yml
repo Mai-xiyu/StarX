@@ -157,3 +157,81 @@ jobs:
               --data-binary "@${ASSET_FILE}"
             echo "Upload complete"
           fi
+
+      - name: Mirror to Xposed-Modules-Repo/org.xiyu.starx
+        if: steps.fetch.outputs.has_new == 'true'
+        env:
+          REPO_PAT: ${{ secrets.REPO_PAT }}
+        run: |
+          set -e
+          XPOSED_REPO="Xposed-Modules-Repo/org.xiyu.starx"
+          TAG="${{ steps.fetch.outputs.upstream_tag }}"
+          NAME="${{ steps.fetch.outputs.upstream_name }}"
+          ASSET_FILE="${{ steps.fetch.outputs.asset_name }}"
+
+          echo "::group::Delete old releases on $XPOSED_REPO"
+          RELEASES=$(curl -sf \
+            -H "Authorization: token ${REPO_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${XPOSED_REPO}/releases" || echo "[]")
+          echo "$RELEASES" | jq -r '.[].id' | while read -r RID; do
+            [ -z "$RID" ] && continue
+            echo "Deleting release $RID"
+            curl -sf -X DELETE \
+              -H "Authorization: token ${REPO_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${XPOSED_REPO}/releases/${RID}" || true
+          done
+
+          echo "::group::Delete old tags on $XPOSED_REPO"
+          TAGS=$(curl -sf \
+            -H "Authorization: token ${REPO_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${XPOSED_REPO}/git/refs/tags" || echo "[]")
+          echo "$TAGS" | jq -r '.[].ref // empty' | while read -r REF; do
+            [ -z "$REF" ] && continue
+            echo "Deleting $REF"
+            curl -sf -X DELETE \
+              -H "Authorization: token ${REPO_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${XPOSED_REPO}/git/${REF}" || true
+          done
+          echo "::endgroup::"
+
+          echo "::group::Create tag $TAG on $XPOSED_REPO"
+          # 取 main 分支最新 commit sha
+          MAIN_SHA=$(curl -sf \
+            -H "Authorization: token ${REPO_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${XPOSED_REPO}/git/ref/heads/main" | jq -r '.object.sha')
+          echo "main sha: $MAIN_SHA"
+          curl -sf -X POST \
+            -H "Authorization: token ${REPO_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${XPOSED_REPO}/git/refs" \
+            -d "$(jq -n --arg ref "refs/tags/${TAG}" --arg sha "$MAIN_SHA" '{ref: $ref, sha: $sha}')"
+          echo "::endgroup::"
+
+          echo "::group::Create release $TAG on $XPOSED_REPO"
+          X_RELEASE=$(curl -sf -X POST \
+            -H "Authorization: token ${REPO_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${XPOSED_REPO}/releases" \
+            -d "$(jq -n \
+              --arg tag "$TAG" \
+              --arg name "$NAME" \
+              --arg body "${{ steps.fetch.outputs.upstream_body }}" \
+              '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')")
+          X_RELEASE_ID=$(echo "$X_RELEASE" | jq -r '.id')
+          echo "Xposed release id: $X_RELEASE_ID"
+          echo "::endgroup::"
+
+          if [ -f "$ASSET_FILE" ] && [ -n "$X_RELEASE_ID" ] && [ "$X_RELEASE_ID" != "null" ]; then
+            echo "Uploading $ASSET_FILE to $XPOSED_REPO"
+            curl -sf -X POST \
+              -H "Authorization: token ${REPO_PAT}" \
+              -H "Content-Type: application/vnd.android.package-archive" \
+              "https://uploads.github.com/repos/${XPOSED_REPO}/releases/${X_RELEASE_ID}/assets?name=${ASSET_FILE}" \
+              --data-binary "@${ASSET_FILE}"
+            echo "Upload to Xposed repo complete"
+          fi
