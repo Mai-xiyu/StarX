@@ -7,6 +7,7 @@
 ## 反馈入口
 
 - 最新公开版本：<https://github.com/Mai-xiyu/StarX/releases>
+- Xposed仓库：<https://github.com/Xposed-Modules-Repo/org.xiyu.starx>
 - 提交问题或建议：<https://github.com/Mai-xiyu/StarX/issues/new/choose>
 - 公测反馈清单：<https://github.com/Mai-xiyu/StarX/blob/main/PUBLIC_TEST_CHECKLIST.md>
 
