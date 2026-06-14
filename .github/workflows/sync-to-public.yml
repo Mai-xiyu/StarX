@@ -65,29 +65,18 @@ jobs:
 
           echo "::endgroup::"
 
-          # 检查公开仓库是否已有相同 tag —— 只有“已存在且已带 APK 资源”才跳过；
-          # 若已存在但没有资源(上次同步漏传)，只补传 APK，不删 tag/不重建 release。
+          # 检查公开仓库是否已有相同 tag
           echo "::group::Checking existing release"
           PUBLIC_RESPONSE=$(curl -sf \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: token ${REPO_PAT}" \
-            "https://api.github.com/repos/Mai-xiyu/StarX/releases/tags/${UPSTREAM_TAG}" 2>/dev/null || echo "")
-          if [ -n "$PUBLIC_RESPONSE" ]; then
-            PUBLIC_ASSETS=$(echo "$PUBLIC_RESPONSE" | jq -r '(.assets // []) | length')
-            if [ "$PUBLIC_ASSETS" -gt 0 ]; then
-              echo "Tag $UPSTREAM_TAG already exists with $PUBLIC_ASSETS asset(s), skipping"
-              echo "has_new=false" >> "$GITHUB_OUTPUT"
-              echo "sync_mode=skip" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            PUBLIC_RELEASE_ID=$(echo "$PUBLIC_RESPONSE" | jq -r '.id')
-            echo "Tag $UPSTREAM_TAG exists but has NO asset, will attach APK to release $PUBLIC_RELEASE_ID"
-            echo "sync_mode=resync_asset" >> "$GITHUB_OUTPUT"
-            echo "public_release_id=$PUBLIC_RELEASE_ID" >> "$GITHUB_OUTPUT"
-          else
-            echo "New release detected: $UPSTREAM_TAG"
-            echo "sync_mode=full_sync" >> "$GITHUB_OUTPUT"
-          fi
+            "https://api.github.com/repos/Mai-xiyu/StarX/releases/tags/${UPSTREAM_TAG}" 2>/dev/null) && {
+            echo "Tag $UPSTREAM_TAG already exists on StarX, skipping"
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          echo "New release detected: $UPSTREAM_TAG"
           echo "has_new=true" >> "$GITHUB_OUTPUT"
           echo "::endgroup::"
 
@@ -96,8 +85,7 @@ jobs:
         env:
           REPO_PAT: ${{ secrets.REPO_PAT }}
         run: |
-          # -f: HTTP 错误即失败（不再把错误页当成 APK 写进文件造成空资源）
-          curl -fL \
+          curl -L \
             -H "Authorization: token ${REPO_PAT}" \
             -H "Accept: application/octet-stream" \
             "${{ steps.fetch.outputs.asset_url }}" \
@@ -105,7 +93,7 @@ jobs:
           ls -lh "${{ steps.fetch.outputs.asset_name }}"
 
       - name: Delete old releases
-        if: steps.fetch.outputs.has_new == 'true' && steps.fetch.outputs.sync_mode == 'full_sync'
+        if: steps.fetch.outputs.has_new == 'true'
         env:
           REPO_PAT: ${{ secrets.REPO_PAT }}
         run: |
@@ -136,33 +124,21 @@ jobs:
 
           echo "::endgroup::"
 
-      - name: Upload APK to existing release
-        if: steps.fetch.outputs.has_new == 'true' && steps.fetch.outputs.sync_mode == 'resync_asset'
-        env:
-          REPO_PAT: ${{ secrets.REPO_PAT }}
-        run: |
-          RELEASE_ID="${{ steps.fetch.outputs.public_release_id }}"
-          ASSET_FILE="${{ steps.fetch.outputs.asset_name }}"
-          echo "Attaching $ASSET_FILE to existing release $RELEASE_ID"
-          curl -sf -X POST \
-            -H "Authorization: token ${REPO_PAT}" \
-            -H "Content-Type: application/vnd.android.package-archive" \
-            "https://uploads.github.com/repos/Mai-xiyu/StarX/releases/${RELEASE_ID}/assets?name=${ASSET_FILE}" \
-            --data-binary "@${ASSET_FILE}"
-          echo "Upload complete"
-
       - name: Create new tag and release
-        if: steps.fetch.outputs.has_new == 'true' && steps.fetch.outputs.sync_mode == 'full_sync'
+        if: steps.fetch.outputs.has_new == 'true'
         env:
           REPO_PAT: ${{ secrets.REPO_PAT }}
         run: |
           TAG="${{ steps.fetch.outputs.upstream_tag }}"
           NAME="${{ steps.fetch.outputs.upstream_name }}"
 
+          # 创建并推送 tag
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
 
-          # 用 API 创建 Release（GitHub 会自动从默认分支创建 tag，避免 git push tag 触发规则 GH013）
+          # 创建 Release (先不带文件)
           RELEASE_RESPONSE=$(curl -sf -X POST \
             -H "Authorization: token ${REPO_PAT}" \
             -H "Accept: application/vnd.github+json" \
@@ -171,11 +147,12 @@ jobs:
               --arg tag "$TAG" \
               --arg name "$NAME" \
               --arg body "${{ steps.fetch.outputs.upstream_body }}" \
-              '{tag_name: $tag, target_commitish: "main", name: $name, body: $body, draft: false, prerelease: false}')")
+              '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')")
 
           RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
           echo "Created release ID: $RELEASE_ID"
 
+          # 上传 asset
           ASSET_FILE="${{ steps.fetch.outputs.asset_name }}"
           if [ -f "$ASSET_FILE" ]; then
             echo "Uploading $ASSET_FILE"
