@@ -72,9 +72,17 @@ jobs:
             exit 0
           fi
 
+          if [[ "$upstream_tag" == v* ]]; then
+            public_tag="$upstream_tag"
+          else
+            public_tag="v${upstream_tag}"
+          fi
+
           echo "Upstream tag: ${upstream_tag}"
+          echo "Public tag: ${public_tag}"
           echo "Selected asset: ${asset_name}"
           echo "upstream_tag=${upstream_tag}" >> "$GITHUB_OUTPUT"
+          echo "public_tag=${public_tag}" >> "$GITHUB_OUTPUT"
           echo "upstream_name=${upstream_name}" >> "$GITHUB_OUTPUT"
           echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
           echo "asset_url=${asset_url}" >> "$GITHUB_OUTPUT"
@@ -83,25 +91,25 @@ jobs:
 
           public_status=$(curl -sS -L -o public_release.json -w "%{http_code}" \
             "${headers[@]}" \
-            "https://api.github.com/repos/${PUBLIC_REPO}/releases/tags/${upstream_tag}")
+            "https://api.github.com/repos/${PUBLIC_REPO}/releases/tags/${public_tag}")
 
           case "$public_status" in
             200)
               public_assets=$(jq -r '(.assets // []) | length' public_release.json)
               if [ "$public_assets" -gt 0 ]; then
-                echo "Tag ${upstream_tag} already exists on ${PUBLIC_REPO} with ${public_assets} asset(s); skip."
+                echo "Tag ${public_tag} already exists on ${PUBLIC_REPO} with ${public_assets} asset(s); skip."
                 echo "has_new=false" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
               public_release_id=$(jq -r '.id' public_release.json)
-              echo "Tag ${upstream_tag} exists on ${PUBLIC_REPO} without assets; reusing release ${public_release_id}."
+              echo "Tag ${public_tag} exists on ${PUBLIC_REPO} without assets; reusing release ${public_release_id}."
               echo "public_release_id=${public_release_id}" >> "$GITHUB_OUTPUT"
               ;;
             404)
-              echo "New release detected: ${upstream_tag}"
+              echo "New public release detected: ${public_tag}"
               ;;
             *)
-              echo "::error::Failed to check ${PUBLIC_REPO} release ${upstream_tag} (HTTP ${public_status})."
+              echo "::error::Failed to check ${PUBLIC_REPO} release ${public_tag} (HTTP ${public_status})."
               cat public_release.json
               echo "has_new=false" >> "$GITHUB_OUTPUT"
               exit 1
@@ -137,7 +145,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          tag='${{ steps.fetch.outputs.upstream_tag }}'
+          tag='${{ steps.fetch.outputs.public_tag }}'
           name='${{ steps.fetch.outputs.upstream_name }}'
           body="$(printf '%s' '${{ steps.fetch.outputs.upstream_body_b64 }}' | base64 -d)"
           asset_file='${{ steps.fetch.outputs.asset_name }}'
