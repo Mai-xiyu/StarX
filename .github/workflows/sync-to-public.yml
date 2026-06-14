@@ -79,6 +79,7 @@ jobs:
           echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
           echo "asset_url=${asset_url}" >> "$GITHUB_OUTPUT"
           echo "upstream_body_b64=${body_b64}" >> "$GITHUB_OUTPUT"
+          echo "public_release_id=" >> "$GITHUB_OUTPUT"
 
           public_status=$(curl -sS -L -o public_release.json -w "%{http_code}" \
             "${headers[@]}" \
@@ -92,7 +93,9 @@ jobs:
                 echo "has_new=false" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
-              echo "Tag ${upstream_tag} exists on ${PUBLIC_REPO} without assets; re-syncing."
+              public_release_id=$(jq -r '.id' public_release.json)
+              echo "Tag ${upstream_tag} exists on ${PUBLIC_REPO} without assets; reusing release ${public_release_id}."
+              echo "public_release_id=${public_release_id}" >> "$GITHUB_OUTPUT"
               ;;
             404)
               echo "New release detected: ${upstream_tag}"
@@ -127,56 +130,6 @@ jobs:
           test -s "$asset_name"
           ls -lh "$asset_name"
 
-      - name: Delete old public releases and tags
-        if: steps.fetch.outputs.has_new == 'true'
-        env:
-          REPO_PAT: ${{ secrets.REPO_PAT }}
-        run: |
-          set -euo pipefail
-
-          headers=(
-            -H "Authorization: Bearer ${REPO_PAT}"
-            -H "Accept: application/vnd.github+json"
-            -H "X-GitHub-Api-Version: 2022-11-28"
-          )
-
-          releases_status=$(curl -sS -L -o public_releases.json -w "%{http_code}" \
-            "${headers[@]}" \
-            "https://api.github.com/repos/${PUBLIC_REPO}/releases?per_page=100")
-          if [ "$releases_status" != "200" ]; then
-            echo "::error::Failed to list ${PUBLIC_REPO} releases (HTTP ${releases_status})."
-            cat public_releases.json
-            exit 1
-          fi
-
-          jq -r '.[].id' public_releases.json | while read -r release_id; do
-            [ -z "$release_id" ] && continue
-            echo "Deleting release ${release_id}"
-            curl -sfL -X DELETE \
-              "${headers[@]}" \
-              "https://api.github.com/repos/${PUBLIC_REPO}/releases/${release_id}" || true
-          done
-
-          tags_status=$(curl -sS -L -o public_tags.json -w "%{http_code}" \
-            "${headers[@]}" \
-            "https://api.github.com/repos/${PUBLIC_REPO}/git/matching-refs/tags")
-          if [ "$tags_status" != "200" ] && [ "$tags_status" != "409" ]; then
-            echo "::error::Failed to list ${PUBLIC_REPO} tags (HTTP ${tags_status})."
-            cat public_tags.json
-            exit 1
-          fi
-          if [ "$tags_status" = "409" ]; then
-            echo "[]" > public_tags.json
-          fi
-
-          jq -r '.[].ref // empty' public_tags.json | while read -r ref; do
-            [ -z "$ref" ] && continue
-            echo "Deleting ${ref}"
-            curl -sfL -X DELETE \
-              "${headers[@]}" \
-              "https://api.github.com/repos/${PUBLIC_REPO}/git/${ref}" || true
-          done
-
       - name: Create public release
         if: steps.fetch.outputs.has_new == 'true'
         env:
@@ -188,6 +141,7 @@ jobs:
           name='${{ steps.fetch.outputs.upstream_name }}'
           body="$(printf '%s' '${{ steps.fetch.outputs.upstream_body_b64 }}' | base64 -d)"
           asset_file='${{ steps.fetch.outputs.asset_name }}'
+          existing_release_id='${{ steps.fetch.outputs.public_release_id }}'
 
           headers=(
             -H "Authorization: Bearer ${REPO_PAT}"
@@ -195,51 +149,39 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28"
           )
 
-          repo_status=$(curl -sS -L -o public_repo.json -w "%{http_code}" \
-            "${headers[@]}" \
-            "https://api.github.com/repos/${PUBLIC_REPO}")
-          if [ "$repo_status" != "200" ]; then
-            echo "::error::Failed to read ${PUBLIC_REPO} metadata (HTTP ${repo_status})."
-            cat public_repo.json
-            exit 1
+          if [ -n "$existing_release_id" ]; then
+            release_id="$existing_release_id"
+            echo "Using existing public release ${release_id} for ${tag}."
+          else
+            repo_status=$(curl -sS -L -o public_repo.json -w "%{http_code}" \
+              "${headers[@]}" \
+              "https://api.github.com/repos/${PUBLIC_REPO}")
+            if [ "$repo_status" != "200" ]; then
+              echo "::error::Failed to read ${PUBLIC_REPO} metadata (HTTP ${repo_status})."
+              cat public_repo.json
+              exit 1
+            fi
+
+            default_branch=$(jq -r '.default_branch' public_repo.json)
+            release_status=$(curl -sS -L -o create_public_release.json -w "%{http_code}" -X POST \
+              "${headers[@]}" \
+              "https://api.github.com/repos/${PUBLIC_REPO}/releases" \
+              -d "$(jq -n \
+                --arg tag "$tag" \
+                --arg target "$default_branch" \
+                --arg name "$name" \
+                --arg body "$body" \
+                '{tag_name: $tag, target_commitish: $target, name: $name, body: $body, draft: false, prerelease: false}')")
+            if [ "$release_status" != "201" ]; then
+              echo "::error::Failed to create release ${tag} on ${PUBLIC_REPO} (HTTP ${release_status})."
+              echo "::error::If the response says Reference update failed, repository rules or the REPO_PAT actor still block creating refs/tags/${tag}."
+              cat create_public_release.json
+              exit 1
+            fi
+
+            release_id=$(jq -r '.id' create_public_release.json)
           fi
 
-          default_branch=$(jq -r '.default_branch' public_repo.json)
-          ref_status=$(curl -sS -L -o public_branch.json -w "%{http_code}" \
-            "${headers[@]}" \
-            "https://api.github.com/repos/${PUBLIC_REPO}/git/ref/heads/${default_branch}")
-          if [ "$ref_status" != "200" ]; then
-            echo "::error::Failed to read ${PUBLIC_REPO} ${default_branch} ref (HTTP ${ref_status})."
-            cat public_branch.json
-            exit 1
-          fi
-
-          target_sha=$(jq -r '.object.sha' public_branch.json)
-          tag_status=$(curl -sS -L -o create_public_tag.json -w "%{http_code}" -X POST \
-            "${headers[@]}" \
-            "https://api.github.com/repos/${PUBLIC_REPO}/git/refs" \
-            -d "$(jq -n --arg ref "refs/tags/${tag}" --arg sha "$target_sha" '{ref: $ref, sha: $sha}')")
-          if [ "$tag_status" != "201" ]; then
-            echo "::error::Failed to create tag ${tag} on ${PUBLIC_REPO} (HTTP ${tag_status})."
-            cat create_public_tag.json
-            exit 1
-          fi
-
-          release_status=$(curl -sS -L -o create_public_release.json -w "%{http_code}" -X POST \
-            "${headers[@]}" \
-            "https://api.github.com/repos/${PUBLIC_REPO}/releases" \
-            -d "$(jq -n \
-              --arg tag "$tag" \
-              --arg name "$name" \
-              --arg body "$body" \
-              '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')")
-          if [ "$release_status" != "201" ]; then
-            echo "::error::Failed to create release ${tag} on ${PUBLIC_REPO} (HTTP ${release_status})."
-            cat create_public_release.json
-            exit 1
-          fi
-
-          release_id=$(jq -r '.id' create_public_release.json)
           upload_name=$(jq -rn --arg v "$asset_file" '$v|@uri')
           upload_status=$(curl -sS -L -o upload_public_asset.json -w "%{http_code}" -X POST \
             -H "Authorization: Bearer ${REPO_PAT}" \
@@ -254,6 +196,43 @@ jobs:
           fi
 
           echo "Uploaded ${asset_file} to ${PUBLIC_REPO} release ${tag}."
+
+          releases_status=$(curl -sS -L -o public_releases.json -w "%{http_code}" \
+            "${headers[@]}" \
+            "https://api.github.com/repos/${PUBLIC_REPO}/releases?per_page=100")
+          if [ "$releases_status" != "200" ]; then
+            echo "::warning::Failed to list ${PUBLIC_REPO} releases for cleanup (HTTP ${releases_status})."
+            cat public_releases.json
+          else
+            jq -r --arg current "$release_id" '.[] | select((.id | tostring) != $current) | .id' public_releases.json | while read -r old_release_id; do
+              [ -z "$old_release_id" ] && continue
+              echo "Deleting old public release ${old_release_id}"
+              curl -sfL -X DELETE \
+                "${headers[@]}" \
+                "https://api.github.com/repos/${PUBLIC_REPO}/releases/${old_release_id}" || true
+            done
+          fi
+
+          tags_status=$(curl -sS -L -o public_tags.json -w "%{http_code}" \
+            "${headers[@]}" \
+            "https://api.github.com/repos/${PUBLIC_REPO}/git/matching-refs/tags")
+          if [ "$tags_status" = "409" ]; then
+            echo "[]" > public_tags.json
+            tags_status="200"
+          fi
+          if [ "$tags_status" != "200" ]; then
+            echo "::warning::Failed to list ${PUBLIC_REPO} tags for cleanup (HTTP ${tags_status})."
+            cat public_tags.json
+          else
+            current_ref="refs/tags/${tag}"
+            jq -r --arg current "$current_ref" '.[] | select(.ref != $current) | .ref // empty' public_tags.json | while read -r ref; do
+              [ -z "$ref" ] && continue
+              echo "Deleting old public ${ref}"
+              curl -sfL -X DELETE \
+                "${headers[@]}" \
+                "https://api.github.com/repos/${PUBLIC_REPO}/git/${ref}" || true
+            done
+          fi
 
       - name: Mirror to Xposed-Modules-Repo/org.xiyu.starx
         if: steps.fetch.outputs.has_new == 'true'
@@ -273,99 +252,106 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28"
           )
 
+          xposed_status=$(curl -sS -L -o xposed_release.json -w "%{http_code}" \
+            "${headers[@]}" \
+            "https://api.github.com/repos/${XPOSED_REPO}/releases/tags/${tag}")
+
+          upload_needed=true
+          case "$xposed_status" in
+            200)
+              release_id=$(jq -r '.id' xposed_release.json)
+              xposed_assets=$(jq -r '(.assets // []) | length' xposed_release.json)
+              if [ "$xposed_assets" -gt 0 ]; then
+                upload_needed=false
+                echo "Xposed release ${tag} already has ${xposed_assets} asset(s)."
+              else
+                echo "Using existing Xposed release ${release_id} for ${tag}."
+              fi
+              ;;
+            404)
+              repo_status=$(curl -sS -L -o xposed_repo.json -w "%{http_code}" \
+                "${headers[@]}" \
+                "https://api.github.com/repos/${XPOSED_REPO}")
+              if [ "$repo_status" != "200" ]; then
+                echo "::error::Failed to read ${XPOSED_REPO} metadata (HTTP ${repo_status})."
+                cat xposed_repo.json
+                exit 1
+              fi
+
+              default_branch=$(jq -r '.default_branch' xposed_repo.json)
+              release_status=$(curl -sS -L -o create_xposed_release.json -w "%{http_code}" -X POST \
+                "${headers[@]}" \
+                "https://api.github.com/repos/${XPOSED_REPO}/releases" \
+                -d "$(jq -n \
+                  --arg tag "$tag" \
+                  --arg target "$default_branch" \
+                  --arg name "$name" \
+                  --arg body "$body" \
+                  '{tag_name: $tag, target_commitish: $target, name: $name, body: $body, draft: false, prerelease: false}')")
+              if [ "$release_status" != "201" ]; then
+                echo "::error::Failed to create release ${tag} on ${XPOSED_REPO} (HTTP ${release_status})."
+                echo "::error::If the response says Reference update failed, repository rules or the REPO_PAT actor still block creating refs/tags/${tag}."
+                cat create_xposed_release.json
+                exit 1
+              fi
+              release_id=$(jq -r '.id' create_xposed_release.json)
+              ;;
+            *)
+              echo "::error::Failed to check ${XPOSED_REPO} release ${tag} (HTTP ${xposed_status})."
+              cat xposed_release.json
+              exit 1
+              ;;
+          esac
+
+          if [ "$upload_needed" = true ]; then
+            upload_name=$(jq -rn --arg v "$asset_file" '$v|@uri')
+            upload_status=$(curl -sS -L -o upload_xposed_asset.json -w "%{http_code}" -X POST \
+              -H "Authorization: Bearer ${REPO_PAT}" \
+              -H "Content-Type: application/vnd.android.package-archive" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://uploads.github.com/repos/${XPOSED_REPO}/releases/${release_id}/assets?name=${upload_name}" \
+              --data-binary "@${asset_file}")
+            if [ "$upload_status" != "201" ]; then
+              echo "::error::Failed to upload ${asset_file} to ${XPOSED_REPO} release ${tag} (HTTP ${upload_status})."
+              cat upload_xposed_asset.json
+              exit 1
+            fi
+            echo "Uploaded ${asset_file} to ${XPOSED_REPO} release ${tag}."
+          fi
+
           releases_status=$(curl -sS -L -o xposed_releases.json -w "%{http_code}" \
             "${headers[@]}" \
             "https://api.github.com/repos/${XPOSED_REPO}/releases?per_page=100")
           if [ "$releases_status" != "200" ]; then
-            echo "::error::Failed to list ${XPOSED_REPO} releases (HTTP ${releases_status})."
+            echo "::warning::Failed to list ${XPOSED_REPO} releases for cleanup (HTTP ${releases_status})."
             cat xposed_releases.json
-            exit 1
+          else
+            jq -r --arg current "$release_id" '.[] | select((.id | tostring) != $current) | .id' xposed_releases.json | while read -r old_release_id; do
+              [ -z "$old_release_id" ] && continue
+              echo "Deleting old Xposed release ${old_release_id}"
+              curl -sfL -X DELETE \
+                "${headers[@]}" \
+                "https://api.github.com/repos/${XPOSED_REPO}/releases/${old_release_id}" || true
+            done
           fi
-
-          jq -r '.[].id' xposed_releases.json | while read -r release_id; do
-            [ -z "$release_id" ] && continue
-            echo "Deleting Xposed release ${release_id}"
-            curl -sfL -X DELETE \
-              "${headers[@]}" \
-              "https://api.github.com/repos/${XPOSED_REPO}/releases/${release_id}" || true
-          done
 
           tags_status=$(curl -sS -L -o xposed_tags.json -w "%{http_code}" \
             "${headers[@]}" \
             "https://api.github.com/repos/${XPOSED_REPO}/git/matching-refs/tags")
-          if [ "$tags_status" != "200" ] && [ "$tags_status" != "409" ]; then
-            echo "::error::Failed to list ${XPOSED_REPO} tags (HTTP ${tags_status})."
-            cat xposed_tags.json
-            exit 1
-          fi
           if [ "$tags_status" = "409" ]; then
             echo "[]" > xposed_tags.json
+            tags_status="200"
           fi
-
-          jq -r '.[].ref // empty' xposed_tags.json | while read -r ref; do
-            [ -z "$ref" ] && continue
-            echo "Deleting Xposed ${ref}"
-            curl -sfL -X DELETE \
-              "${headers[@]}" \
-              "https://api.github.com/repos/${XPOSED_REPO}/git/${ref}" || true
-          done
-
-          repo_status=$(curl -sS -L -o xposed_repo.json -w "%{http_code}" \
-            "${headers[@]}" \
-            "https://api.github.com/repos/${XPOSED_REPO}")
-          if [ "$repo_status" != "200" ]; then
-            echo "::error::Failed to read ${XPOSED_REPO} metadata (HTTP ${repo_status})."
-            cat xposed_repo.json
-            exit 1
+          if [ "$tags_status" != "200" ]; then
+            echo "::warning::Failed to list ${XPOSED_REPO} tags for cleanup (HTTP ${tags_status})."
+            cat xposed_tags.json
+          else
+            current_ref="refs/tags/${tag}"
+            jq -r --arg current "$current_ref" '.[] | select(.ref != $current) | .ref // empty' xposed_tags.json | while read -r ref; do
+              [ -z "$ref" ] && continue
+              echo "Deleting old Xposed ${ref}"
+              curl -sfL -X DELETE \
+                "${headers[@]}" \
+                "https://api.github.com/repos/${XPOSED_REPO}/git/${ref}" || true
+            done
           fi
-
-          default_branch=$(jq -r '.default_branch' xposed_repo.json)
-          ref_status=$(curl -sS -L -o xposed_branch.json -w "%{http_code}" \
-            "${headers[@]}" \
-            "https://api.github.com/repos/${XPOSED_REPO}/git/ref/heads/${default_branch}")
-          if [ "$ref_status" != "200" ]; then
-            echo "::error::Failed to read ${XPOSED_REPO} ${default_branch} ref (HTTP ${ref_status})."
-            cat xposed_branch.json
-            exit 1
-          fi
-
-          target_sha=$(jq -r '.object.sha' xposed_branch.json)
-          tag_status=$(curl -sS -L -o create_xposed_tag.json -w "%{http_code}" -X POST \
-            "${headers[@]}" \
-            "https://api.github.com/repos/${XPOSED_REPO}/git/refs" \
-            -d "$(jq -n --arg ref "refs/tags/${tag}" --arg sha "$target_sha" '{ref: $ref, sha: $sha}')")
-          if [ "$tag_status" != "201" ]; then
-            echo "::error::Failed to create tag ${tag} on ${XPOSED_REPO} (HTTP ${tag_status})."
-            cat create_xposed_tag.json
-            exit 1
-          fi
-
-          release_status=$(curl -sS -L -o create_xposed_release.json -w "%{http_code}" -X POST \
-            "${headers[@]}" \
-            "https://api.github.com/repos/${XPOSED_REPO}/releases" \
-            -d "$(jq -n \
-              --arg tag "$tag" \
-              --arg name "$name" \
-              --arg body "$body" \
-              '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')")
-          if [ "$release_status" != "201" ]; then
-            echo "::error::Failed to create release ${tag} on ${XPOSED_REPO} (HTTP ${release_status})."
-            cat create_xposed_release.json
-            exit 1
-          fi
-
-          release_id=$(jq -r '.id' create_xposed_release.json)
-          upload_name=$(jq -rn --arg v "$asset_file" '$v|@uri')
-          upload_status=$(curl -sS -L -o upload_xposed_asset.json -w "%{http_code}" -X POST \
-            -H "Authorization: Bearer ${REPO_PAT}" \
-            -H "Content-Type: application/vnd.android.package-archive" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://uploads.github.com/repos/${XPOSED_REPO}/releases/${release_id}/assets?name=${upload_name}" \
-            --data-binary "@${asset_file}")
-          if [ "$upload_status" != "201" ]; then
-            echo "::error::Failed to upload ${asset_file} to ${XPOSED_REPO} release ${tag} (HTTP ${upload_status})."
-            cat upload_xposed_asset.json
-            exit 1
-          fi
-
-          echo "Uploaded ${asset_file} to ${XPOSED_REPO} release ${tag}."
