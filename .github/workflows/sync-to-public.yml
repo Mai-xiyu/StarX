@@ -159,7 +159,7 @@ jobs:
 
           tags_status=$(curl -sS -L -o public_tags.json -w "%{http_code}" \
             "${headers[@]}" \
-            "https://api.github.com/repos/${PUBLIC_REPO}/git/refs/tags")
+            "https://api.github.com/repos/${PUBLIC_REPO}/git/matching-refs/tags")
           if [ "$tags_status" != "200" ] && [ "$tags_status" != "409" ]; then
             echo "::error::Failed to list ${PUBLIC_REPO} tags (HTTP ${tags_status})."
             cat public_tags.json
@@ -292,7 +292,7 @@ jobs:
 
           tags_status=$(curl -sS -L -o xposed_tags.json -w "%{http_code}" \
             "${headers[@]}" \
-            "https://api.github.com/repos/${XPOSED_REPO}/git/refs/tags")
+            "https://api.github.com/repos/${XPOSED_REPO}/git/matching-refs/tags")
           if [ "$tags_status" != "200" ] && [ "$tags_status" != "409" ]; then
             echo "::error::Failed to list ${XPOSED_REPO} tags (HTTP ${tags_status})."
             cat xposed_tags.json
