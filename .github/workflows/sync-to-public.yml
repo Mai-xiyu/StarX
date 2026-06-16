@@ -101,11 +101,6 @@ jobs:
           fi
 
           public_tag="$upstream_tag"
-          # GitHub immutable releases already consumed refs/tags/1.3.9 in the public mirror.
-          # Keep the release title and APK version at 1.3.9; only the public mirror tag gets a collision suffix.
-          if [ "$upstream_tag" = "1.3.9" ]; then
-            public_tag="1.3.91"
-          fi
 
           echo "Upstream tag: ${upstream_tag}"
           echo "Public tag: ${public_tag}"
