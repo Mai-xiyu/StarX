@@ -42,17 +42,45 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28"
           )
 
-          status=$(curl -sS -L -o upstream_release.json -w "%{http_code}" \
+          status=$(curl -sS -L -o upstream_releases.json -w "%{http_code}" \
             "${headers[@]}" \
-            "https://api.github.com/repos/${PRIVATE_REPO}/releases/latest")
+            "https://api.github.com/repos/${PRIVATE_REPO}/releases?per_page=100")
 
           if [ "$status" != "200" ]; then
-            echo "::error::Failed to fetch latest release from ${PRIVATE_REPO} (HTTP ${status})."
-            echo "::error::If this is 404, the token cannot read the private repository or no published release exists."
-            cat upstream_release.json
+            echo "::error::Failed to list releases from ${PRIVATE_REPO} (HTTP ${status})."
+            echo "::error::If this is 404, the token cannot read the private repository."
+            cat upstream_releases.json
             echo "has_new=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+
+          selected_release=$(jq -c '
+            def semver:
+              capture("^v?(?<major>0|[1-9][0-9]*)\\.(?<minor>0|[1-9][0-9]*)\\.(?<patch>0|[1-9][0-9]*)(?:[-+].*)?$")?;
+
+            [
+              .[]
+              | select(.draft == false and .prerelease == false)
+              | . as $release
+              | ($release.tag_name | semver) as $version
+              | select($version != null)
+              | $release + {
+                  _major: ($version.major | tonumber),
+                  _minor: ($version.minor | tonumber),
+                  _patch: ($version.patch | tonumber)
+                }
+            ]
+            | sort_by(._major, ._minor, ._patch, .created_at)
+            | last
+          ' upstream_releases.json)
+
+          if [ -z "$selected_release" ] || [ "$selected_release" = "null" ]; then
+            echo "No published semantic-version release found in ${PRIVATE_REPO}; skip and retry on the next run."
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          printf '%s\n' "$selected_release" | jq 'del(._major, ._minor, ._patch)' > upstream_release.json
 
           upstream_tag=$(jq -r '.tag_name // empty' upstream_release.json)
           upstream_name=$(jq -r '.name // .tag_name // empty' upstream_release.json)
@@ -72,10 +100,11 @@ jobs:
             exit 0
           fi
 
-          if [[ "$upstream_tag" == v* ]]; then
-            public_tag="$upstream_tag"
-          else
-            public_tag="v${upstream_tag}"
+          public_tag="$upstream_tag"
+          # GitHub immutable releases already consumed refs/tags/1.3.9 in the public mirror.
+          # Keep the release title and APK version at 1.3.9; only the public mirror tag gets a collision suffix.
+          if [ "$upstream_tag" = "1.3.9" ]; then
+            public_tag="1.3.91"
           fi
 
           echo "Upstream tag: ${upstream_tag}"
